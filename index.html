@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>奶龙合成大作战 · 网页试玩版</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #FFF7E0;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; touch-action: none;
+  }
+  .topbar { display: flex; align-items: center; justify-content: space-between; width: 100%; max-width: 430px; padding: 10px 14px; }
+  .title { font-size: 17px; font-weight: 600; color: #6b4a00; }
+  .scorebox { display: flex; flex-direction: column; align-items: center; min-width: 58px; background: #fff; border: 2px solid #F0C93C; border-radius: 10px; padding: 3px 10px; }
+  .scorebox .label { font-size: 10px; color: #b08a1e; }
+  .scorebox .num { font-size: 18px; font-weight: 600; color: #6b4a00; }
+  .stage { position: relative; width: 100%; max-width: 430px; flex: 1; min-height: 0; padding: 0 12px; }
+  canvas { width: 100%; height: 100%; display: block; border: 3px solid #F0C93C; border-radius: 14px; background: #FFFDF2; }
+  .chain { display: flex; gap: 10px; overflow-x: auto; width: 100%; max-width: 430px; padding: 10px 14px 2px; }
+  .chain-item { display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; }
+  .chain-item img { width: 36px; height: 36px; border-radius: 50%; border: 2px solid #F0C93C; background: #fff; }
+  .chain-item span { font-size: 10px; color: #8a6d1f; margin-top: 2px; }
+  .tip { font-size: 11px; color: #c2a24d; padding: 4px 0 12px; }
+  .overlay { position: absolute; inset: 0 12px; display: none; align-items: center; justify-content: center; background: rgba(60,40,0,.55); border-radius: 14px; }
+  .overlay.show { display: flex; }
+  .card { display: flex; flex-direction: column; align-items: center; width: 250px; background: #fff; border-radius: 18px; padding: 20px; }
+  .card img { width: 160px; height: 160px; border-radius: 14px; }
+  .card h2 { margin-top: 12px; font-size: 19px; color: #6b4a00; text-align: center; }
+  .card p { margin-top: 4px; font-size: 14px; color: #b08a1e; }
+  .card button { margin-top: 16px; width: 160px; font-size: 16px; font-weight: 600; color: #fff; background: #FFC53D; border: none; border-radius: 22px; padding: 8px 0; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h2 class="sr-only">奶龙合成大作战网页试玩版，拖动瞄准松手投掷，相同奶龙碰撞合成进化。</h2>
+  <div class="topbar">
+    <div class="scorebox"><span class="label">分数</span><span class="num" id="score">0</span></div>
+    <div class="title">🟡 奶龙合成大作战（试玩版）</div>
+    <div class="scorebox"><span class="label">最高</span><span class="num" id="best">0</span></div>
+  </div>
+  <div class="stage">
+    <canvas id="game"></canvas>
+    <div class="overlay" id="overlay">
+      <div class="card">
+        <img id="ovImg" src="peek.jpg" alt="">
+        <h2 id="ovTitle"></h2>
+        <p id="ovSub"></p>
+        <button id="ovBtn"></button>
+      </div>
+    </div>
+  </div>
+  <div class="chain" id="chain"></div>
+  <div class="tip">拖动瞄准 · 松手投掷 · 相同奶龙合成进化</div>
+
+<script>
+const TIERS = [
+  { r: 13, img: 'normal.jpg', name: '奶龙崽崽', color: '#F5C445' },
+  { r: 17, img: 'sad.png', name: '小奶龙', color: '#F0B429' },
+  { r: 22, img: 'muscle.png', name: '圆滚滚', color: '#E8A020' },
+  { r: 28, img: 'normal.jpg', name: '大奶龙', color: '#E08C14' },
+  { r: 34, img: 'shocked.jpeg', name: '惊惊奶龙', color: '#9BC46B' },
+  { r: 41, img: 'shocked.jpeg', name: '惊恐奶龙', color: '#6FA34C' },
+  { r: 49, img: 'shocked.jpeg', name: '抱头奶龙', color: '#4F8A3C' },
+  { r: 58, img: 'glow.jpg', name: '发光奶龙', color: '#B8D94A' },
+  { r: 68, img: 'glow.jpg', name: '觉醒奶龙', color: '#8FBC2E' },
+  { r: 80, img: 'multi.jpeg', name: '九头奶龙', color: '#E8743B' },
+  { r: 94, img: 'battle.jpg', name: '战斗奶龙', color: '#C9302C' }
+];
+const DROP_Y = 70, LOSE_Y = 110, GRAVITY = 0.45, REST = 0.18, COOLDOWN = 550;
+
+const chainEl = document.getElementById('chain');
+TIERS.forEach((t, i) => {
+  const d = document.createElement('div');
+  d.className = 'chain-item';
+  d.innerHTML = '<img src="' + t.img + '"><span>' + (i + 1) + '·' + t.name + '</span>';
+  chainEl.appendChild(d);
+});
+
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+let W = 375, H = 560, s = 1;
+let imgs = {}, balls = [], effects = [];
+let score = 0, best = +(localStorage.getItem('nailong_best') || 0);
+let over = false, battleShown = false, dangerFrames = 0;
+let canDrop = true, aimX = 187;
+let curTier = randTier(), nextTier = randTier();
+
+document.getElementById('best').textContent = best;
+
+function resize() {
+  const stage = cv.parentElement;
+  const rect = stage.getBoundingClientRect();
+  W = rect.width - 24;
+  H = rect.height - 6;
+  const dpr = window.devicePixelRatio || 2;
+  cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  s = W / 375;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function loadImg(src) {
+  return new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+}
+Promise.all([...new Set(TIERS.map(t => t.img))].map(loadImg)).then(list => {
+  const srcs = [...new Set(TIERS.map(t => t.img))];
+  srcs.forEach((src, i) => { if (list[i]) imgs[src] = list[i]; });
+  requestAnimationFrame(loop);
+});
+
+function randTier() {
+  const r = Math.random();
+  return r < 0.34 ? 0 : r < 0.62 ? 1 : r < 0.83 ? 2 : r < 0.95 ? 3 : 4;
+}
+function clampAim(x) {
+  const r = TIERS[curTier].r * s;
+  return Math.max(r, Math.min(W - r, x));
+}
+
+function drop() {
+  if (!canDrop || over) return;
+  canDrop = false;
+  const t = TIERS[curTier];
+  balls.push({ x: aimX, y: DROP_Y * s, vx: 0, vy: 0, r: t.r * s, tier: curTier, noMerge: 6, dead: false });
+  curTier = nextTier; nextTier = randTier();
+  setTimeout(() => { if (!over) canDrop = true; }, COOLDOWN);
+}
+
+cv.addEventListener('pointerdown', e => { aimX = clampAim(e.offsetX); });
+cv.addEventListener('pointermove', e => { if (e.buttons) aimX = clampAim(e.offsetX); });
+cv.addEventListener('pointerup', () => drop());
+
+function loop() {
+  update(); render();
+  requestAnimationFrame(loop);
+}
+
+function update() {
+  const g = GRAVITY * s, floor = H;
+  for (const b of balls) {
+    if (b.dead) continue;
+    if (b.noMerge > 0) b.noMerge--;
+    b.vy += g; b.vx *= 0.995;
+    b.x += b.vx; b.y += b.vy;
+    if (b.x - b.r < 0) { b.x = b.r; b.vx = -b.vx * REST; }
+    else if (b.x + b.r > W) { b.x = W - b.r; b.vx = -b.vx * REST; }
+    if (b.y + b.r > floor) { b.y = floor - b.r; if (b.vy > 0) b.vy = -b.vy * REST; b.vx *= 0.92; }
+    const sp = Math.hypot(b.vx, b.vy), maxSp = 18 * s;
+    if (sp > maxSp) { b.vx = b.vx / sp * maxSp; b.vy = b.vy / sp * maxSp; }
+  }
+  for (let i = 0; i < balls.length; i++) {
+    const a = balls[i]; if (a.dead) continue;
+    for (let j = i + 1; j < balls.length; j++) {
+      const b = balls[j]; if (b.dead) continue;
+      collide(a, b);
+    }
+  }
+  balls = balls.filter(b => !b.dead);
+  effects.forEach(e => e.life -= 0.06);
+  effects = effects.filter(e => e.life > 0);
+  checkDanger();
+}
+
+function collide(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  let d = Math.hypot(dx, dy);
+  const minD = a.r + b.r;
+  if (d >= minD) return;
+  if (d === 0) d = 0.01;
+  const nx = dx / d, ny = dy / d;
+  if (a.tier === b.tier && a.tier < TIERS.length - 1 && a.noMerge <= 0 && b.noMerge <= 0) {
+    mergeBalls(a, b); return;
+  }
+  const overlap = minD - d, m1 = a.r * a.r, m2 = b.r * b.r, tm = m1 + m2;
+  a.x -= nx * overlap * (m2 / tm) * 0.85; a.y -= ny * overlap * (m2 / tm) * 0.85;
+  b.x += nx * overlap * (m1 / tm) * 0.85; b.y += ny * overlap * (m1 / tm) * 0.85;
+  const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+  if (vn < 0) {
+    const j = (-(1 + REST) * vn) / (1 / m1 + 1 / m2);
+    a.vx -= j * nx / m1; a.vy -= j * ny / m1;
+    b.vx += j * nx / m2; b.vy += j * ny / m2;
+  }
+}
+
+function mergeBalls(a, b) {
+  a.dead = b.dead = true;
+  const tier = a.tier + 1, t = TIERS[tier];
+  const nx = (a.x + b.x) / 2, ny = (a.y + b.y) / 2;
+  balls.push({ x: nx, y: ny, vx: (a.vx + b.vx) * 0.2, vy: Math.min(-2 * s, -1), r: t.r * s, tier, noMerge: 8, dead: false });
+  effects.push({ x: nx, y: ny, r: t.r * s, life: 1, color: t.color });
+  score += (tier + 1) * (tier + 1);
+  document.getElementById('score').textContent = score;
+  if (score > best) {
+    best = score;
+    localStorage.setItem('nailong_best', best);
+    document.getElementById('best').textContent = best;
+  }
+  if (tier === TIERS.length - 1 && !battleShown) {
+    battleShown = true;
+    showOverlay('battle.jpg', '战斗模式奶龙，诞生！', '可继续堆分，冲击更高纪录', '继续挑战', 'battle');
+  }
+}
+
+function checkDanger() {
+  const loseY = LOSE_Y * s;
+  let danger = false;
+  for (const b of balls) {
+    if (b.y - b.r < loseY && Math.abs(b.vx) + Math.abs(b.vy) < 2.5 * s && b.noMerge <= 0) { danger = true; break; }
+  }
+  dangerFrames = danger ? dangerFrames + 1 : 0;
+  if (dangerFrames > 80 && !over) {
+    over = true;
+    showOverlay('peek.jpg', '奶龙堆满啦！', '本局得分 ' + score + (score >= best ? ' · 新纪录！' : ''), '再来一局', 'over');
+  }
+}
+
+function showOverlay(img, title, sub, btn, mode) {
+  const ov = document.getElementById('overlay');
+  document.getElementById('ovImg').src = img;
+  document.getElementById('ovTitle').textContent = title;
+  document.getElementById('ovSub').textContent = sub;
+  const b = document.getElementById('ovBtn');
+  b.textContent = btn;
+  b.onclick = () => {
+    if (mode === 'over') {
+      balls = []; effects = []; score = 0; over = false; battleShown = false; dangerFrames = 0;
+      canDrop = true; curTier = randTier(); nextTier = randTier();
+      document.getElementById('score').textContent = 0;
+      ov.classList.remove('show');
+    } else {
+      ov.classList.remove('show');
+    }
+  };
+  ov.classList.add('show');
+}
+
+function drawBall(x, y, r, tier) {
+  const t = TIERS[tier];
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.clip();
+  const img = imgs[t.img];
+  if (img) ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
+  else { ctx.fillStyle = '#F5C445'; ctx.fillRect(x - r, y - r, r * 2, r * 2); }
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = t.color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, r - 1, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+function render() {
+  ctx.fillStyle = '#FFFDF2';
+  ctx.fillRect(0, 0, W, H);
+  const loseY = LOSE_Y * s;
+  ctx.save();
+  ctx.strokeStyle = '#F09595'; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
+  ctx.beginPath(); ctx.moveTo(0, loseY); ctx.lineTo(W, loseY); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = 'rgba(226,75,74,.55)'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('警戒线', 8, loseY - 6);
+
+  if (canDrop && !over) {
+    const cur = TIERS[curTier], cy = DROP_Y * s, r = cur.r * s;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(184,166,62,.5)'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 7]);
+    ctx.beginPath(); ctx.moveTo(aimX, cy + r); ctx.lineTo(aimX, H); ctx.stroke();
+    ctx.restore();
+    drawBall(aimX, cy, r, curTier);
+  }
+  for (const b of balls) drawBall(b.x, b.y, b.r, b.tier);
+  for (const e of effects) {
+    ctx.save();
+    ctx.globalAlpha = e.life * 0.7;
+    ctx.strokeStyle = e.color; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (1.7 - e.life * 0.7), 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+  const px = W - 34 * s, py = 30 * s, pr = 16 * s;
+  ctx.save();
+  ctx.globalAlpha = 0.9; ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(px, py, pr + 3 * s, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  drawBall(px, py, pr, nextTier);
+  ctx.fillStyle = '#8a6d1f'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('下一只', px, py + pr + 14 * s);
+}
+</script>
+</body>
+</html>
